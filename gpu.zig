@@ -5,10 +5,14 @@ const fmt = @import("fmt/fmt.zig");
 
 const Debug = @import("Debug.zig");
 
-pub const Gpu = struct {
-    const port = @import("gpu/ports.zig");
+const Kernel = @import("kernel.zig");
+const SysCalls = @import("syscalls.zig");
+const Timers = @import("hardware/timers.zig");
+const port = @import("hardware/gpu.zig");
+const Cpu = @import("hardware/cpu.zig");
 
-    pub const Cfg = struct { x: Pos = 0, y: Pos = 0, w: Pos, h: Pos };
+pub const Gpu = struct {
+    pub const Cfg = struct { hResolution: HResolution, vResolution: VResolution, mode: VideoMode, interlace: bool, colourDepth: ColourDepth };
 
     pub const Color = packed struct { r: u8, g: u8, b: u8 };
 
@@ -84,8 +88,69 @@ pub const Gpu = struct {
     //     // port.ctrl.* = @bitCast(DrawingAreaOffset{});
     // }
 
+    const DrawOpType = enum { Dma, GpuIrq };
+
+    var drawOpType = DrawOpType.Dma;
+
+    fn setDrawOpType(opType: DrawOpType) void {
+        drawOpType = opType;
+    }
+
+    fn sendBuffer(opType: DrawOpType) void {
+        setDrawOpType(opType);
+
+        port.ctrl.* - 0x4000002; // DMA to GP0
+    }
+
+    var vblank_counter: u32 = 0;
+
+    fn vblank_handler() void {
+        vblank_counter = vblank_counter + 1;
+    }
+
     fn reset() void {
         port.ctrl.* = 0;
+    }
+
+    fn fifoPollingMode() void {
+        port.ctrl.* = 0x04000001;
+    }
+
+    pub const HResolution = enum(u2) { H256, H320, H512, H640 };
+    pub const VResolution = enum(u1) { V240, V480 };
+    pub const VideoMode = enum(u1) { NTSC, PAL };
+    pub const ColourDepth = enum(u1) { B15, B24 };
+
+    fn displayMode(comptime cfg: Cfg) void {
+        const DisplayModeCommand = packed struct(u32) { hResolution: HResolution, vResolution: VResolution, mode: VideoMode, colourDepth: ColourDepth, interlace: bool, hResolution2: bool, flip: bool, reserved: u16, command: u8 };
+
+        port.ctrl.* = @bitCast(DisplayModeCommand{ .hResolution = cfg.hResolution, .vResolution = cfg.vResolution, .mode = cfg.mode, .interlace = cfg.interlace, .colourDepth = cfg.colourDepth, .hResolution2 = false, .flip = false, .reserved = 0, .command = 0x08 });
+    }
+
+    fn setHorizontalRange() void {
+        const HorizontalRangeCommand = packed struct(u32) { x1: u12, x2: u12, command: u8 };
+
+        port.ctrl.* = @bitCast(HorizontalRangeCommand{ .x1 = 0x260, .x2 = 0xc60, .command = 0x06 });
+    }
+
+    fn setVerticalRange(comptime _: Cfg) void {
+        //       const VerticalRangeCommand = packed struct(u32) { v1: u10, v2: u10, reserved: u4, command: u8 };
+
+        //        const v1 = if (cfg.mode == VideoMode.NTSC) 16 else 0x2b;
+        //       const v2 = if (cfg.mode == VideoMode.NTSC) 255 else 0x9b;
+
+        port.ctrl.* = 0x07046c2b; //@bitCast(VerticalRangeCommand{ .v1 = v1, .v2 = v2, .command = 0x07, .reserved = 0 });
+    }
+
+    fn setDisplayStart(x: u10, y: u9) void {
+        const DisplayStartCommand = packed struct(u32) { x: u10, y: u9, reserved: u5, command: u8 };
+
+        port.ctrl.* = @bitCast(DisplayStartCommand{ .x = x, .y = y, .command = 0x05, .reserved = 0 });
+    }
+
+    fn resetCommandBuffer() void {
+        const ResetCommandBuffer = packed struct(u32) { reserved: u30 = 0, command: u2 = 0x02 };
+        port.ctrl.* = @bitCast(ResetCommandBuffer{});
     }
 
     fn enableDisplay() void {
@@ -94,7 +159,7 @@ pub const Gpu = struct {
         port.ctrl.* = @bitCast(DisplayEnable{});
     }
 
-    fn quickFill(color: Color, position: SVector, size: SVector) void {
+    pub fn quickFill(color: Color, position: SVector, size: SVector) void {
         const QuickFillCommand = packed struct { color: Color, command: u8 = 0x02 };
 
         port.data.* = @bitCast(QuickFillCommand{ .color = color });
@@ -103,37 +168,61 @@ pub const Gpu = struct {
         port.data.* = @bitCast(size);
     }
 
-    pub fn init(comptime cfg: Cfg) !void {
-        comptime {
-            const screen_widths = [_]Pos{ 320, 368 };
-            const screen_heights = [_]Pos{240};
+    pub fn wait_vsync() void {
+        const imask = Cpu.imask.*;
 
-            blk: {
-                for (screen_widths) |width| {
-                    if (width == cfg.w) {
-                        break :blk;
-                    }
-                }
-                @compileError("Invalid width");
-            }
+        Cpu.imask.* = imask | @intFromEnum(Cpu.IrqChannels.VBlank);
 
-            blk: {
-                for (screen_heights) |height| {
-                    if (height == cfg.h) {
-                        break :blk;
-                    }
-                }
-                @compileError("Invalid height");
-            }
+        while ((Cpu.ireg.* & @intFromEnum(Cpu.IrqChannels.VBlank)) == 0) {
+            // asm volatile (
+            //     \\ nop
+            // );
         }
 
+        Cpu.ireg.* &= ~@intFromEnum(Cpu.IrqChannels.VBlank);
+        Cpu.imask.* = imask;
+    }
+
+    pub fn vblank() void {
+        const target = vblank_counter + 1;
+
+        while (vblank_counter != target) {
+            asm volatile (
+                \\ nop
+            );
+        }
+    }
+
+    pub fn init(comptime cfg: Cfg) !void {
+        SysCalls.EnterCriticalSection();
+
         reset();
-        port.ctrl.* = 0x01000000; // Reset command buffer
+        fifoPollingMode();
+        displayMode(cfg);
+        setHorizontalRange();
+        setVerticalRange(cfg);
+        setDisplayStart(0, 0);
+
+        Timers.timers[1].mode = 0x100;
+        Timers.timers[1].value = 0;
+
+        // resetCommandBuffer();
         port.ctrl.* = 0x02000000; // Reset IRQ
         port.ctrl.* = 0x04000000; // Disable DMA
         enableDisplay();
 
-        quickFill(Color{ .r = 0, .g = 0, .b = 0xff }, SVector{ .x = 0x04, .y = 0x40 }, SVector{ .x = 0x40, .y = 0x40 });
+        vblank_counter = 0xdeadbeef;
+        const gpuEvent = SysCalls.OpenEvent(SysCalls.EventClass.TimerVBlank, 2, SysCalls.EventMode.Callback, vblank_handler);
+        SysCalls.EnableEvent(gpuEvent);
+        SysCalls.EnableTimerIRQ(3);
+        SysCalls.SetTimerAutoAck(3, 1);
+
+        //   Kernel.EnableDMA(Kernel.DMA.GPU, 7);
+        //   Kernel.EnableDMA(Kernel.DMA.OTC, 7);
+
+        port.ctrl.* = 0x04000001; // Disable DMA
+
+        SysCalls.ExitCriticalSection();
 
         // initTexPage();
         // initTextureWindow();

@@ -4,8 +4,8 @@ pub const Debug = struct {
             \\ li $t2, 0xa0
             \\ li $t1, 0x3f
             \\ jr $t2
-            : [ret] "={r2}" (-> c_int),
-            : [str] "{r4}" (str),
+            : [ret] "={$2}" (-> c_int),
+            : [str] "{$4}" (str),
         );
     }
 };

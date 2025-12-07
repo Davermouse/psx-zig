@@ -1,0 +1,31 @@
+diff --git a/llvm/lib/Target/Mips/MipsSEISelLowering.cpp b/llvm/lib/Target/Mips/MipsSEISelLowering.cpp
+index 71a70d9c2..59e0c19ce 100644
+--- a/llvm/lib/Target/Mips/MipsSEISelLowering.cpp
++++ b/llvm/lib/Target/Mips/MipsSEISelLowering.cpp
+@@ -235,7 +235,12 @@ MipsSETargetLowering::MipsSETargetLowering(const MipsTargetMachine &TM,
+ 
+   setOperationAction(ISD::SDIVREM, MVT::i32, Custom);
+   setOperationAction(ISD::UDIVREM, MVT::i32, Custom);
+-  setOperationAction(ISD::ATOMIC_FENCE,       MVT::Other, Custom);
++// "sync" instruction only available on MIPS-II and above
++  if (Subtarget.hasMips2()) {
++    setOperationAction(ISD::ATOMIC_FENCE, MVT::Other, Custom);
++  } else {
++    setOperationAction(ISD::ATOMIC_FENCE, MVT::Other, Expand);
++  }
+   if (Subtarget.hasMips32r6()) {
+     setOperationAction(ISD::LOAD,               MVT::i32, Legal);
+     setOperationAction(ISD::STORE,              MVT::i32, Legal);
+diff --git a/llvm/lib/Target/Mips/MipsSubtarget.cpp b/llvm/lib/Target/Mips/MipsSubtarget.cpp
+index 8c4bb15a7..3e7dfa4ae 100644
+--- a/llvm/lib/Target/Mips/MipsSubtarget.cpp
++++ b/llvm/lib/Target/Mips/MipsSubtarget.cpp
+@@ -95,7 +95,7 @@ MipsSubtarget::MipsSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
+ 
+   // MIPS-I has not been tested.
+   if (MipsArchVersion == Mips1 && !MIPS1WarningPrinted) {
+-    errs() << "warning: MIPS-I support is experimental\n";
++  //  errs() << "warning: MIPS-I support is experimental\n";
+     MIPS1WarningPrinted = true;
+   }
+ 
