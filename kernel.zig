@@ -2,10 +2,7 @@ const Cpu = @import("hardware/cpu.zig");
 const SysCalls = @import("syscalls.zig");
 const Debug = @import("Debug.zig").Debug;
 
-const KernelData = packed struct {
-    data: [*]u8,
-    length: u32 
-};
+const KernelData = packed struct { data: [*]u8, length: u32 };
 
 pub const DMA = enum(u3) { MDECin, MDECout, GPU, CDRom, SPU, EXP1, OTC };
 
@@ -44,21 +41,29 @@ pub fn Install() void {
 }
 
 pub fn EnableDMA(channel: DMA, priority: u3) void {
-    const DMASettings = packed struct(u4) { priority: u3, enabled: u1 };
+    // const DMASettings = packed struct(u4) { priority: u3, enabled: u1 };
 
     var dpcr = Cpu.dpcr.*;
+    if (priority > 7) priority = 7;
     const shift: u4 = @intFromEnum(channel) * 4;
 
     const mask = @as(u32, 15) << shift;
     dpcr &= ~mask;
 
-    const settings = DMASettings{ .enabled = 1, .priority = priority };
-    const narrowSettings: u4 = @bitCast(settings);
-    const update: u32 = @as(u32, narrowSettings) << shift;
-
-    dpcr |= update;
+    var val = @as(u32, priority);
+    val |= 8;
+    val <<= shift;
+    dpcr |= mask;
 
     Cpu.dpcr.* = dpcr;
+
+    // const settings = DMASettings{ .enabled = 1, .priority = priority };
+    // const narrowSettings: u4 = @bitCast(settings);
+    // const update: u32 = @as(u32, narrowSettings) << shift;
+
+    // dpcr |= update;
+
+    // Cpu.dpcr.* = dpcr;
 
     _ = Debug.puts("DMA Enabled");
 }

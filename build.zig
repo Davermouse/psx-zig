@@ -1,6 +1,5 @@
 const std = @import("std");
 
-// TODO: We can't use .mips1 here as we can an error from llvm
 const targets: std.Target.Query =
     .{
         .cpu_arch = .mipsel,

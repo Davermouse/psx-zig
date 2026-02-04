@@ -15,8 +15,26 @@ pub const Gpu = struct {
     pub const Cfg = struct { hResolution: HResolution, vResolution: VResolution, mode: VideoMode, interlace: bool, colourDepth: ColourDepth };
 
     pub const Color = packed struct { r: u8, g: u8, b: u8 };
-
+    pub const ColorCmd = packed struct { color: Color, pad: u8 };
     pub const SVector = packed struct { x: u16, y: u16 };
+
+    pub const Rect = packed struct { x: u16, y: u16, w: u16, h: u16 };
+
+    pub const DispEnv = struct {
+        display: Rect,
+        screen: Rect,
+    };
+
+    pub const DrawEnv = struct {
+        clip: Rect,
+    };
+
+    pub const RenderBuffer = struct {
+        displayEnv: DispEnv,
+        drawEnv: DrawEnv,
+    };
+
+    pub const RenderContext = struct { buffers: [2]RenderBuffer, active_buffer: usize };
 
     // const Self = @This();
 
@@ -99,7 +117,7 @@ pub const Gpu = struct {
     fn sendBuffer(opType: DrawOpType) void {
         setDrawOpType(opType);
 
-        port.ctrl.* - 0x4000002; // DMA to GP0
+        port.ctrl.* = 0x4000002; // DMA to GP0
     }
 
     var vblank_counter: u32 = 0;
@@ -142,46 +160,106 @@ pub const Gpu = struct {
         port.ctrl.* = 0x07046c2b; //@bitCast(VerticalRangeCommand{ .v1 = v1, .v2 = v2, .command = 0x07, .reserved = 0 });
     }
 
-    fn setDisplayStart(x: u10, y: u9) void {
-        const DisplayStartCommand = packed struct(u32) { x: u10, y: u9, reserved: u5, command: u8 };
+    // fn setDisplayArea(x: u10, y: u9) u32 {
+    //     const DisplayAreaCommand = packed struct(u32) {};
+    // }
 
-        port.ctrl.* = @bitCast(DisplayStartCommand{ .x = x, .y = y, .command = 0x05, .reserved = 0 });
+    const DisplayPosCommand = packed struct(u32) { x: u10, y: u9, reserved: u5, command: u8 };
+
+    fn setDrawingStartGP0(x: u10, y: u9) u32 {
+        return @bitCast(DisplayPosCommand{ .x = x, .y = y, .command = 0xe4, .reserved = 0 });
     }
 
-    fn resetCommandBuffer() void {
+    fn setDrawingEndGP0(x: u10, y: u9) u32 {
+        return @bitCast(DisplayPosCommand{ .x = x, .y = y, .command = 0xe5, .reserved = 0 });
+    }
+
+    fn setDrawingOffsetGP0(x: u10, y: u9) u32 {
+        const SetDrawingOffsetCommand = packed struct(u32) { x: u11, y: u11, reserved: u2, command: u8 };
+
+        return @bitCast(SetDrawingOffsetCommand{ .x = x, .y = y, .reserved = 0, .command = 0xe5 });
+    }
+
+    fn resetCommandBufferGP1() void {
         const ResetCommandBuffer = packed struct(u32) { reserved: u30 = 0, command: u2 = 0x02 };
         port.ctrl.* = @bitCast(ResetCommandBuffer{});
     }
 
-    fn enableDisplay() void {
+    fn enableDisplayGP1() u32 {
         const DisplayEnable = packed struct { enable: enum(u1) { On = 0, Off = 1 } = .On, reserved: u23 = 0, cmd: u8 = 0x03 };
 
-        port.ctrl.* = @bitCast(DisplayEnable{});
+        return @bitCast(DisplayEnable{});
     }
 
-    pub fn quickFill(color: Color, position: SVector, size: SVector) void {
-        const QuickFillCommand = packed struct { color: Color, command: u8 = 0x02 };
+    fn texPage(page: u8, dither: u1, unlockFB: u1) u32 {
+        const TexPage = packed struct { page: u8, dither: u1, unlockFB: u1, pad: u14, cmd: u8 };
 
+        return @bitCast(TexPage{ .page = page, .dither = dither, .unlockFB = unlockFB, .pad = 0, .cmd = 0xe1 });
+    }
+
+    fn vramfill() u32 {
+        return 2 << 24;
+    }
+
+    fn clockMultiplier(res: HResolution) u32 {
+        if (res == HResolution.H256) {
+            return 10;
+        } else if (res == HResolution.H320) {
+            return 8;
+        } else if (res == HResolution.H512) {
+            return 5;
+        } else if (res == HResolution.H640) {
+            return 4;
+        }
+
+        return 0;
+    }
+
+    fn clockDivider(res: VResolution) u32 {
+        if (res == VResolution.V240) {
+            return 1;
+        } else if (res == VResolution.V480) {
+            return 2;
+        }
+
+        return 0;
+    }
+
+    const QuickFillCommand = packed struct { color: Color, command: u8 = 0x02 };
+
+    pub fn quickFill(color: Color, position: SVector, size: SVector) void {
         port.data.* = @bitCast(QuickFillCommand{ .color = color });
 
         port.data.* = @bitCast(position);
         port.data.* = @bitCast(size);
     }
 
-    pub fn wait_vsync() void {
-        const imask = Cpu.imask.*;
+    const TriangleCommand = packed struct { color: Color, rawTex: bool, semiTrans: bool, textured: bool, fourVerts: bool, gourand: bool, cmd: u3 };
 
-        Cpu.imask.* = imask | @intFromEnum(Cpu.IrqChannels.VBlank);
-
-        while ((Cpu.ireg.* & @intFromEnum(Cpu.IrqChannels.VBlank)) == 0) {
-            // asm volatile (
-            //     \\ nop
-            // );
-        }
-
-        Cpu.ireg.* &= ~@intFromEnum(Cpu.IrqChannels.VBlank);
-        Cpu.imask.* = imask;
+    pub fn shadedTriangle(vs: [3]SVector, cs: [3]Color) void {
+        port.data.* = @bitCast(TriangleCommand{ .color = cs[0], .rawTex = false, .semiTrans = false, .textured = false, .fourVerts = false, .gourand = true, .cmd = 1 });
+        port.data.* = @bitCast(vs[0]);
+        port.data.* = @bitCast(ColorCmd{ .color = cs[1], .pad = 0 });
+        port.data.* = @bitCast(vs[1]);
+        port.data.* = @bitCast(ColorCmd{ .color = cs[2], .pad = 0 });
+        port.data.* = @bitCast(vs[2]);
     }
+
+    // TODO: This hasn't been tested - the simpler counter based vblank should be fine though
+    // pub fn wait_vsync() void {
+    //     const imask = Cpu.imask.*;
+
+    //     Cpu.imask.* = imask | @intFromEnum(Cpu.IrqChannels.VBlank);
+
+    //     while ((Cpu.ireg.* & @intFromEnum(Cpu.IrqChannels.VBlank)) == 0) {
+    //         // asm volatile (
+    //         //     \\ nop
+    //         // );
+    //     }
+
+    //     Cpu.ireg.* &= ~@intFromEnum(Cpu.IrqChannels.VBlank);
+    //     Cpu.imask.* = imask;
+    // }
 
     pub fn vblank() void {
         const target = vblank_counter + 1;
@@ -193,15 +271,39 @@ pub const Gpu = struct {
         }
     }
 
+    pub const GP1StatusFlags = enum(u32) { CMDReady = 1 << 26 };
+
+    pub fn waitForReady() void {
+        while (!(port.ctrl.* & GP1StatusFlags.CMDReady)) {
+            asm volatile (
+                \\ nop
+            );
+        }
+    }
+
+    pub fn sendData(data: u32) void {
+        port.data.* = data;
+    }
+
+    pub fn sendCmd(cmd: u32) void {
+        port.ctrl = cmd;
+    }
+
+    var context: RenderContext = .{ .active_buffer = 0, .buffers = .{
+        RenderBuffer{ .displayEnv = DispEnv{ .display = Rect{ .x = 0, .y = 0, .w = 0, .h = 0 }, .screen = Rect{ .x = 0, .y = 0, .w = 0, .h = 0 } }, .drawEnv = DrawEnv{ .clip = Rect{ .x = 0, .y = 0, .w = 0, .h = 0 } } },
+        RenderBuffer{ .displayEnv = DispEnv{ .display = Rect{ .x = 0, .y = 0, .w = 0, .h = 0 }, .screen = Rect{ .x = 0, .y = 0, .w = 0, .h = 0 } }, .drawEnv = DrawEnv{ .clip = Rect{ .x = 0, .y = 0, .w = 0, .h = 0 } } },
+    } };
+
     pub fn init(comptime cfg: Cfg) !void {
         SysCalls.EnterCriticalSection();
 
         reset();
+
         fifoPollingMode();
         displayMode(cfg);
         setHorizontalRange();
         setVerticalRange(cfg);
-        setDisplayStart(0, 0);
+        port.ctrl.* = setDrawingStartGP0(0, 0);
 
         Timers.timers[1].mode = 0x100;
         Timers.timers[1].value = 0;
@@ -209,7 +311,7 @@ pub const Gpu = struct {
         // resetCommandBuffer();
         port.ctrl.* = 0x02000000; // Reset IRQ
         port.ctrl.* = 0x04000000; // Disable DMA
-        enableDisplay();
+        port.ctrl.* = enableDisplayGP1();
 
         vblank_counter = 0xdeadbeef;
         const gpuEvent = SysCalls.OpenEvent(SysCalls.EventClass.TimerVBlank, 2, SysCalls.EventMode.Callback, vblank_handler);
@@ -217,17 +319,38 @@ pub const Gpu = struct {
         SysCalls.EnableTimerIRQ(3);
         SysCalls.SetTimerAutoAck(3, 1);
 
-        //   Kernel.EnableDMA(Kernel.DMA.GPU, 7);
-        //   Kernel.EnableDMA(Kernel.DMA.OTC, 7);
+        //   Kernel.EnableDMA(Kernel.DMA.OTC, 6);
+        Kernel.EnableDMA(Kernel.DMA.GPU, 7);
 
-        port.ctrl.* = 0x04000001; // Disable DMA
+        port.ctrl.* = 0x04000001; // Enable DMA
 
         SysCalls.ExitCriticalSection();
+
+        // context.buffers[0].drawEnv.clip.x = 0;
+        // context.buffers[0].drawEnv.clip.y = 0;
+        // context.buffers[0].drawEnv.clip.w = 320;
+        // context.buffers[0].drawEnv.clip.h = 240;
 
         // initTexPage();
         // initTextureWindow();
         // initDrawingArea(cfg.w, cfg.h);
         // initDrawingAreaOffset(cfg.x, cfg.y);
         // enableDisplay();
+    }
+
+    pub fn swap() void {
+        const screenWidth = 320;
+        const screenHeight = 240;
+
+        const frameX: u32 = if (context.active_buffer) 320 else 0;
+        const frameY: u32 = 0;
+
+        context.active_buffer = !context.active_buffer;
+
+        waitForReady();
+        port.data.* = texPage(0, true, false);
+        port.data.* = setDrawingStartGP0(frameX, frameY);
+        port.data.* = setDrawingEndGP0(frameX + screenWidth - 1, frameY + screenHeight - 2);
+        // port.data.* = setDisplayAreaGP0(x, y);
     }
 };
