@@ -3,13 +3,13 @@ pub const VRAM_W: Pos = 1024;
 pub const VRAM_H: Pos = 512;
 const fmt = @import("fmt/fmt.zig");
 
-const Debug = @import("Debug.zig");
+const Debug = @import("./Debug.zig");
 
-const Kernel = @import("kernel.zig");
-const SysCalls = @import("syscalls.zig");
-const Timers = @import("hardware/timers.zig");
-const port = @import("hardware/gpu.zig");
-const Cpu = @import("hardware/cpu.zig");
+const Kernel = @import("./kernel.zig");
+const SysCalls = @import("./syscalls.zig");
+const Timers = @import("./hardware/timers.zig");
+const port = @import("./hardware/gpu.zig");
+const Cpu = @import("./hardware/cpu.zig");
 
 pub const Gpu = struct {
     pub const Cfg = struct { hResolution: HResolution, vResolution: VResolution, mode: VideoMode, interlace: bool, colourDepth: ColourDepth };

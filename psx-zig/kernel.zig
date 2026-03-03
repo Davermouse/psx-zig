@@ -1,6 +1,6 @@
 const Cpu = @import("hardware/cpu.zig");
 const SysCalls = @import("syscalls.zig");
-const Debug = @import("Debug.zig").Debug;
+const Debug = @import("Debug.zig");
 
 const KernelData = packed struct { data: [*]u8, length: u32 };
 

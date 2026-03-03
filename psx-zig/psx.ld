@@ -1,8 +1,3 @@
-/*
- * Linker script to generate an ELF file
- * that has to be converted to PS-X EXE.
- */
-
 OUTPUT_FORMAT("binary")
 
 ENTRY(start)
