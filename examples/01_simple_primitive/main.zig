@@ -22,7 +22,7 @@ export fn main() noreturn {
     while (true) {
         Gpu.quickFill(Gpu.Color{ .r = 0, .g = 0, .b = 0 }, Gpu.SVector{ .x = 0, .y = 0 }, Gpu.SVector{ .x = 100 + 0x40, .y = 240 });
 
-        Gpu.shadedTriangle([_]Gpu.SVector{ Gpu.SVector{ .x = 10, .y = 10 }, Gpu.SVector{ .x = 10, .y = 100 }, Gpu.SVector{ .x = 50, .y = 75 } }, [_]Gpu.Color{ Gpu.Color{ .r = 128, .g = 0, .b = 0 }, Gpu.Color{ .r = 0, .g = 128, .b = 0 }, Gpu.Color{ .r = 0, .g = 0, .b = 128 } });
+        Gpu.shadedTriangle([_]Gpu.SVector{ Gpu.SVector{ .x = x, .y = 10 }, Gpu.SVector{ .x = x + 10, .y = 100 }, Gpu.SVector{ .x = x + 50, .y = 75 } }, [_]Gpu.Color{ Gpu.Color{ .r = 128, .g = 0, .b = 0 }, Gpu.Color{ .r = 0, .g = 128, .b = 0 }, Gpu.Color{ .r = 0, .g = 0, .b = 128 } });
 
         x += 1;
 

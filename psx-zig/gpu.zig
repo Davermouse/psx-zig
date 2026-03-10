@@ -1,6 +1,7 @@
 pub const Pos = u16;
 pub const VRAM_W: Pos = 1024;
 pub const VRAM_H: Pos = 512;
+
 const fmt = @import("fmt/fmt.zig");
 
 const Debug = @import("./Debug.zig");
@@ -8,7 +9,6 @@ const Debug = @import("./Debug.zig");
 const Kernel = @import("./kernel.zig");
 const SysCalls = @import("./syscalls.zig");
 const Timers = @import("./hardware/timers.zig");
-const port = @import("./hardware/gpu.zig");
 const Cpu = @import("./hardware/cpu.zig");
 
 pub const Gpu = struct {
@@ -36,6 +36,7 @@ pub const Gpu = struct {
 
     pub const RenderContext = struct { buffers: [2]RenderBuffer, active_buffer: usize };
 
+    pub const port = @import("./hardware/gpu.zig");
     // const Self = @This();
 
     // const DrawEnv = struct { width: Pos, height: Pos };
@@ -151,6 +152,8 @@ pub const Gpu = struct {
         port.ctrl.* = @bitCast(HorizontalRangeCommand{ .x1 = 0x260, .x2 = 0xc60, .command = 0x06 });
     }
 
+    pub const FrameBufferOffsetCommand = packed struct(u32) { x: u10, y: u9, pad: u5, cmd: u8 };
+
     fn setVerticalRange(comptime _: Cfg) void {
         //       const VerticalRangeCommand = packed struct(u32) { v1: u10, v2: u10, reserved: u4, command: u8 };
 
@@ -166,15 +169,15 @@ pub const Gpu = struct {
 
     const DisplayPosCommand = packed struct(u32) { x: u10, y: u9, reserved: u5, command: u8 };
 
-    fn setDrawingStartGP0(x: u10, y: u9) u32 {
+    pub fn setDrawingStartGP0(x: u10, y: u9) u32 {
+        return @bitCast(DisplayPosCommand{ .x = x, .y = y, .command = 0xe3, .reserved = 0 });
+    }
+
+    pub fn setDrawingEndGP0(x: u10, y: u9) u32 {
         return @bitCast(DisplayPosCommand{ .x = x, .y = y, .command = 0xe4, .reserved = 0 });
     }
 
-    fn setDrawingEndGP0(x: u10, y: u9) u32 {
-        return @bitCast(DisplayPosCommand{ .x = x, .y = y, .command = 0xe5, .reserved = 0 });
-    }
-
-    fn setDrawingOffsetGP0(x: u10, y: u9) u32 {
+    pub fn setDrawingOffsetGP0(x: u10, y: u9) u32 {
         const SetDrawingOffsetCommand = packed struct(u32) { x: u11, y: u11, reserved: u2, command: u8 };
 
         return @bitCast(SetDrawingOffsetCommand{ .x = x, .y = y, .reserved = 0, .command = 0xe5 });
@@ -191,7 +194,7 @@ pub const Gpu = struct {
         return @bitCast(DisplayEnable{});
     }
 
-    fn texPage(page: u8, dither: u1, unlockFB: u1) u32 {
+    pub fn texPage(page: u8, dither: u1, unlockFB: u1) u32 {
         const TexPage = packed struct { page: u8, dither: u1, unlockFB: u1, pad: u14, cmd: u8 };
 
         return @bitCast(TexPage{ .page = page, .dither = dither, .unlockFB = unlockFB, .pad = 0, .cmd = 0xe1 });
@@ -225,7 +228,7 @@ pub const Gpu = struct {
         return 0;
     }
 
-    const QuickFillCommand = packed struct { color: Color, command: u8 = 0x02 };
+    pub const QuickFillCommand = packed struct { color: Color, command: u8 = 0x02 };
 
     pub fn quickFill(color: Color, position: SVector, size: SVector) void {
         port.data.* = @bitCast(QuickFillCommand{ .color = color });
@@ -234,7 +237,7 @@ pub const Gpu = struct {
         port.data.* = @bitCast(size);
     }
 
-    const TriangleCommand = packed struct { color: Color, rawTex: bool, semiTrans: bool, textured: bool, fourVerts: bool, gourand: bool, cmd: u3 };
+    pub const TriangleCommand = packed struct { color: Color, rawTex: bool, semiTrans: bool, textured: bool, fourVerts: bool, gourand: bool, cmd: u3 };
 
     pub fn shadedTriangle(vs: [3]SVector, cs: [3]Color) void {
         port.data.* = @bitCast(TriangleCommand{ .color = cs[0], .rawTex = false, .semiTrans = false, .textured = false, .fourVerts = false, .gourand = true, .cmd = 1 });
@@ -245,6 +248,8 @@ pub const Gpu = struct {
         port.data.* = @bitCast(vs[2]);
     }
 
+    pub const RectangleSize = enum(u2) { Variable, Single, Sprite8x8, Sprite16x16 };
+    pub const RectangleCommand = packed struct { color: Color, rawTex: bool, semiTrans: bool, textured: bool, size: RectangleSize, cmd: u3 };
     // TODO: This hasn't been tested - the simpler counter based vblank should be fine though
     // pub fn wait_vsync() void {
     //     const imask = Cpu.imask.*;
@@ -264,7 +269,7 @@ pub const Gpu = struct {
     pub fn vblank() void {
         const target = vblank_counter + 1;
 
-        while (vblank_counter != target) {
+        while (vblank_counter < target) {
             asm volatile (
                 \\ nop
             );
@@ -274,7 +279,7 @@ pub const Gpu = struct {
     pub const GP1StatusFlags = enum(u32) { CMDReady = 1 << 26 };
 
     pub fn waitForReady() void {
-        while (!(port.ctrl.* & GP1StatusFlags.CMDReady)) {
+        while ((port.data.* & @intFromEnum(GP1StatusFlags.CMDReady)) != 0) {
             asm volatile (
                 \\ nop
             );
